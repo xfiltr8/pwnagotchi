@@ -77,12 +77,11 @@ class Display(View):
         self._video_enabled = config['ui']['display']['video']['enabled']
         self._video_port = config['ui']['display']['video']['port']
         self._video_address = config['ui']['display']['video']['address']
-        self._display_type = config['ui']['display']['type']
-        self._display_color = config['ui']['display']['color']
-        self._render_cb = None
         self._display = None
         self._httpd = None
         self.canvas = None
+        self._frame_counter = 0
+        self._refresh_interval = 60
 
         if self._enabled:
             self._init_display()
@@ -101,32 +100,14 @@ class Display(View):
         else:
             core.log("could not get ip of usb0, video server not starting")
 
-    def _is_inky(self):
-        return self._display_type in ('inkyphat', 'inky')
-
-    def _is_waveshare(self):
-        return self._display_type in ('waveshare', 'ws')
-
     def _init_display(self):
-        if self._is_inky():
-            from inky import InkyPHAT
-            self._display = InkyPHAT(self._display_color)
-            self._display.set_border(InkyPHAT.BLACK)
-            self._render_cb = self._inky_render
-        elif self._is_waveshare():
-            from pwnagotchi.ui.waveshare import EPD
-            # core.log("display module started")
-            self._display = EPD()
-            self._display.init(self._display.FULL_UPDATE)
-            self._display.Clear(WHITE)
-            self._display.init(self._display.PART_UPDATE)
-            self._render_cb = self._waveshare_render
-        else:
-            core.log("unknown display type %s" % self._display_type)
-
+        from pwnagotchi.ui.waveshare import EPD
+        # core.log("display module started")
+        self._display = EPD()
+        self._display.init(self._display.lut_full_update)
+        self._display.Clear(WHITE)
+        self._display.init(self._display.lut_partial_update)
         self.on_render(self._on_view_rendered)
-
-        core.log("display type '%s' initialized (color:%s)" % (self._display_type, self._display_color))
 
     def image(self):
         img = None
@@ -134,44 +115,18 @@ class Display(View):
             img = self.canvas if self._rotation == 0 else self.canvas.rotate(-self._rotation)
         return img
 
-    def _inky_render(self):
-        if self._display_color != 'mono':
-            display_colors = 3
-        else:
-            display_colors = 2
-
-        imgbuf = self.canvas.convert('RGB').convert('P', palette=1, colors=display_colors)
-
-        if self._display_color == 'red':
-            imgbuf.putpalette([
-                255, 255, 255,  # index 0 is white
-                0, 0, 0,  # index 1 is black
-                255, 0, 0  # index 2 is red
-            ])
-        elif self._display_color == 'yellow':
-            imgbuf.putpalette([
-                255, 255, 255,  # index 0 is white
-                0, 0, 0,  # index 1 is black
-                255, 255, 0  # index 2 is yellow
-            ])
-        else:
-            imgbuf.putpalette([
-                255, 255, 255,  # index 0 is white
-                0, 0, 0  # index 1 is black
-            ])
-
-        self._display.set_image(imgbuf)
-        self._display.show()
-
-    def _waveshare_render(self):
-        buf = self._display.getbuffer(self.canvas)
-        self._display.displayPartial(buf)
-
     def _on_view_rendered(self, img):
         # core.log("display::_on_view_rendered")
         VideoHandler.render(img)
 
         if self._enabled:
             self.canvas = img if self._rotation == 0 else img.rotate(self._rotation)
-            if self._render_cb is not None:
-                self._render_cb()
+            buf = self._display.getbuffer(self.canvas)
+            if self._frame_counter > self._refresh_interval:
+                self._display.init(self._display.lut_full_update)
+                self._display.Clear(WHITE)
+                self._display.init(self._display.lut_partial_update)
+                self._frame_counter = 0
+            else:
+                self._frame_counter += 1
+            self._display.display(buf)
